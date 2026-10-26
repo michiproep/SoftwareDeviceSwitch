@@ -2,159 +2,8 @@ using System.ComponentModel;
 
 namespace SoftwareDeviceSwitch;
 
-public sealed class SwitchWindow : Form
+public sealed partial class SwitchWindow : Form
 {
-    readonly ProfileLibrary library;
-    readonly SplitContainer split = new() { Dock = DockStyle.Fill, Size = new Size(1220, 850), SplitterDistance = 235, FixedPanel = FixedPanel.Panel1, IsSplitterFixed = true };
-    readonly ListBox profileList = new() { Dock = DockStyle.Fill, IntegralHeight = false };
-    readonly TextBox targetName = new() { Width = 220 };
-    readonly NumericUpDown channel = new() { Minimum = 1, Maximum = 3, Width = 100 };
-    readonly DataGridView monitors = MakeGrid();
-    readonly DataGridView devices = MakeGrid();
-    readonly TextBox log = new() { Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false, Font = new Font("Consolas", 9), Dock = DockStyle.Fill };
-    readonly Label heading = new() { AutoSize = true, Font = new Font("Segoe UI", 17, FontStyle.Bold) };
-    readonly Label status = new() { AutoSize = true, MaximumSize = new Size(850, 0) };
-    List<NativeHardware.MonitorChoice> monitorChoices = [];
-    BindingList<MonitorSetting> monitorSettings = [];
-    BindingList<DeviceSetting> deviceSettings = [];
-    string currentName = "";
-    bool loading;
-    bool dirty;
-
-    static DataGridView MakeGrid() => new()
-    {
-        Dock = DockStyle.Fill,
-        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
-        BackgroundColor = Color.White,
-        AllowUserToAddRows = false,
-        AutoGenerateColumns = true,
-        SelectionMode = DataGridViewSelectionMode.FullRowSelect,
-        MultiSelect = false
-    };
-
-    public SwitchWindow(ProfileLibrary library)
-    {
-        this.library = library;
-        Text = "Device Switch";
-        Size = new Size(1220, 850);
-        MinimumSize = new Size(1000, 700);
-        Font = new Font("Segoe UI", 10);
-        StartPosition = FormStartPosition.CenterScreen;
-
-        BuildProfileMenu();
-        BuildSettingsView();
-        Controls.Add(split);
-        profileList.SelectedValueChanged += ProfileSelectionChanged;
-        PopulateProfileList();
-    }
-
-    void BuildProfileMenu()
-    {
-        var menu = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Padding = new Padding(10) };
-        menu.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        menu.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        menu.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        menu.Controls.Add(new Label { Text = $"Profiles ({library.Profiles.Count})", AutoSize = true, Font = new Font("Segoe UI", 15, FontStyle.Bold), Margin = new Padding(0, 0, 0, 10) }, 0, 0);
-        menu.Controls.Add(profileList, 0, 1);
-        var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false, Margin = new Padding(0, 10, 0, 0) };
-        var add = new Button { Text = "Add", AutoSize = true };
-        add.Click += (_, _) => AddProfile();
-        var delete = new Button { Text = "Delete", AutoSize = true };
-        delete.Click += (_, _) => DeleteProfile();
-        buttons.Controls.AddRange([add, delete]);
-        menu.Controls.Add(buttons, 0, 2);
-        split.Panel1.Controls.Add(menu);
-    }
-
-    void BuildSettingsView()
-    {
-        var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = new Padding(20) };
-        var content = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 1, RowCount = 7 };
-        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 210));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 250));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
-        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 115));
-        content.Controls.Add(heading, 0, 0);
-
-        var destinationBox = new GroupBox { Text = "Destination computer", Dock = DockStyle.Fill, Height = 72, Padding = new Padding(12) };
-        var destinationRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        destinationRow.Controls.Add(new Label { Text = "Computer name:", AutoSize = true, Margin = new Padding(3, 8, 12, 3) });
-        destinationRow.Controls.Add(targetName);
-        targetName.TextChanged += (_, _) => MarkDirty();
-        destinationBox.Controls.Add(destinationRow);
-        content.Controls.Add(destinationBox, 0, 1);
-
-        var channelBox = new GroupBox { Text = "Destination channel", Dock = DockStyle.Fill, Height = 72, Padding = new Padding(12) };
-        var channelRow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
-        channelRow.Controls.Add(new Label { Text = "Logitech Easy-Switch channel:", AutoSize = true, Margin = new Padding(3, 8, 12, 3) });
-        channelRow.Controls.Add(channel);
-        channel.ValueChanged += (_, _) => MarkDirty();
-        channelBox.Controls.Add(channelRow);
-        content.Controls.Add(channelBox, 0, 2);
-
-        content.Controls.Add(BuildMonitorSection(), 0, 3);
-        content.Controls.Add(BuildDeviceSection(), 0, 4);
-
-        var footer = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(0, 8, 0, 0) };
-        var save = new Button { Text = "Save profile", AutoSize = true };
-        save.Click += (_, _) => SaveCurrent();
-        var test = new Button { Text = "Test and switch", AutoSize = true };
-        test.Click += async (_, _) => await TestProfile();
-        footer.Controls.AddRange([save, test, status]);
-        content.Controls.Add(footer, 0, 5);
-        content.Controls.Add(log, 0, 6);
-        scroll.Controls.Add(content);
-        split.Panel2.Controls.Add(scroll);
-    }
-
-    Control BuildMonitorSection()
-    {
-        var group = new GroupBox { Text = "Monitors", Dock = DockStyle.Fill, Padding = new Padding(10) };
-        var inner = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-        inner.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        inner.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
-        var find = new Button { Text = "Find monitors", AutoSize = true };
-        find.Click += (_, _) => FindMonitors();
-        var test = new Button { Text = "Test selected monitor", AutoSize = true };
-        test.Click += async (_, _) => await TestSelectedMonitor();
-        actions.Controls.AddRange([find, test]);
-        inner.Controls.Add(actions, 0, 0);
-        monitors.CellValueChanged += (_, _) => MarkDirty();
-        monitors.RowsAdded += (_, _) => MarkDirty();
-        monitors.RowsRemoved += (_, _) => MarkDirty();
-        inner.Controls.Add(monitors, 0, 1);
-        group.Controls.Add(inner);
-        return group;
-    }
-
-    Control BuildDeviceSection()
-    {
-        var section = new GroupBox { Text = "Mouse and keyboard", Dock = DockStyle.Fill, Padding = new Padding(10), Margin = new Padding(8) };
-        var inner = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
-        inner.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        inner.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var actions = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
-        var list = new Button { Text = "List HID devices", AutoSize = true };
-        list.Click += (_, _) => { try { log.Text = string.Join(Environment.NewLine, NativeHardware.ListHid()); } catch (Exception e) { SetStatus(e.Message); } };
-        var discover = new Button { Text = "Discover devices", AutoSize = true };
-        discover.Click += async (_, _) => await DiscoverDevices();
-        var test = new Button { Text = "Test selected device", AutoSize = true };
-        test.Click += async (_, _) => await TestSelectedDevice();
-        actions.Controls.AddRange([list, discover, test]);
-        inner.Controls.Add(actions, 0, 0);
-        devices.CellValueChanged += (_, _) => MarkDirty();
-        devices.RowsAdded += (_, _) => MarkDirty();
-        devices.RowsRemoved += (_, _) => MarkDirty();
-        inner.Controls.Add(devices, 0, 1);
-        section.Controls.Add(inner);
-        return section;
-    }
-
     void PopulateProfileList()
     {
         loading = true;
@@ -169,30 +18,28 @@ public sealed class SwitchWindow : Form
         loading = false;
         if (profileList.SelectedItem is string selectedName) LoadProfile(selectedName);
         else ShowEmptyState();
+        UpdateSummary();
     }
 
     void ProfileSelectionChanged(object? sender, EventArgs e)
     {
         if (loading || profileList.SelectedItem is not string name || name.Equals(currentName, StringComparison.OrdinalIgnoreCase)) return;
-        if (dirty)
+        if (!ConfirmLeaveCurrent())
         {
-            var answer = MessageBox.Show($"Save changes to '{currentName}' before selecting another profile?", "Unsaved changes", MessageBoxButtons.YesNoCancel);
-            if (answer == DialogResult.Cancel)
-            {
-                loading = true;
-                profileList.SelectedItem = currentName;
-                loading = false;
-                return;
-            }
-            if (answer == DialogResult.Yes && !SaveCurrent())
-            {
-                loading = true;
-                profileList.SelectedItem = currentName;
-                loading = false;
-                return;
-            }
+            loading = true;
+            profileList.SelectedItem = currentName;
+            loading = false;
+            return;
         }
         LoadProfile(name);
+    }
+
+    bool ConfirmLeaveCurrent()
+    {
+        if (!string.IsNullOrEmpty(currentName) && (!monitors.EndEdit() || !devices.EndEdit())) return false;
+        if (!dirty) return true;
+        var answer = MessageBox.Show(this, $"Save changes to '{currentName}'?", "Unsaved changes", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+        return answer == DialogResult.No || answer == DialogResult.Yes && SaveCurrent();
     }
 
     void LoadProfile(string name)
@@ -209,40 +56,52 @@ public sealed class SwitchWindow : Form
         monitors.DataSource = monitorSettings;
         BindMonitorColumns();
         devices.DataSource = deviceSettings;
-        if (devices.Columns["Slot"] is DataGridViewColumn slot) slot.HeaderText = "Receiver slot";
-        if (devices.Columns["Feature"] is DataGridViewColumn feature) feature.HeaderText = "Change Host feature index";
-        if (devices.Columns["Function"] is DataGridViewColumn function) function.HeaderText = "Function and SWID byte";
+        BindDeviceColumns();
         dirty = false;
-        status.Text = $"Loaded {library.Profiles.Count} profile(s) from {library.ConfigPath}";
-        log.Clear();
+        SetStatus("Ready to switch.");
+        log.Text = $"Profile file: {library.ConfigPath}\r\nSelected profile: {name}\r\n\r\nDiscovery and switch details will appear here.";
         loading = false;
+        UpdateSaveState();
     }
 
     void ShowEmptyState()
     {
+        loading = true;
         currentName = "";
-        heading.Text = "Add a profile to get started";
+        heading.Text = "Your desk, connected";
         targetName.Text = "";
         channel.Value = 1;
         monitorSettings = [];
         deviceSettings = [];
         monitors.DataSource = monitorSettings;
         devices.DataSource = deviceSettings;
+        BindMonitorColumns();
+        BindDeviceColumns();
         dirty = false;
-        status.Text = $"No profiles loaded. Looking beside the executable: {AppPaths.ExecutableDirectory} (profile.json or profiles.json)";
+        loading = false;
+        SetStatus("Add your first profile using the sidebar.");
+        log.Text = $"No profiles loaded. Profile folder: {AppPaths.ExecutableDirectory}";
+        UpdateSaveState();
+        saveBadge.Text = "No profile";
     }
 
     void BindMonitorColumns()
     {
-        var options = monitorChoices.ToList();
+        var options = monitorChoices.Select((m, i) => m with { Label = $"Screen {i + 1}: {m.Label.Split(" | ")[0]} (input {m.CurrentInput})" }).ToList();
         foreach (var setting in monitorSettings.Where(s => !string.IsNullOrWhiteSpace(s.Selector)))
             if (options.All(o => !o.Id.Equals(setting.Selector, StringComparison.OrdinalIgnoreCase)))
-                options.Add(new(setting.Selector, "Saved ID: " + setting.Selector, "", "unknown"));
+            {
+                var parts = setting.Selector.Split('\\');
+                string model = parts.Length > 1 ? parts[1] : "Saved monitor";
+                options.Add(new(setting.Selector, $"Screen {options.Count + 1}: {model} (saved connection)", "", "unknown"));
+            }
+        options.Insert(0, new("", "Choose a monitor...", "", "unknown"));
         monitors.AutoGenerateColumns = false;
         monitors.Columns.Clear();
-        monitors.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Use", DataPropertyName = "Enabled", FillWeight = 10 });
-        monitors.Columns.Add(new DataGridViewComboBoxColumn { HeaderText = "Monitor (Plug and Play ID)", DataPropertyName = "Selector", DataSource = options, ValueMember = "Id", DisplayMember = "Label", FillWeight = 65, FlatStyle = FlatStyle.Flat });
-        monitors.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Destination input", DataPropertyName = "Input", FillWeight = 25 });
+        monitors.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Use", DataPropertyName = "Enabled", Width = 52, MinimumWidth = 52, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, HeaderCell = { Style = { Padding = new Padding(1), Alignment = DataGridViewContentAlignment.MiddleCenter } } });
+        monitors.Columns.Add(new DataGridViewComboBoxColumn { HeaderText = "Monitor", DataPropertyName = "Selector", DataSource = options, ValueMember = "Id", DisplayMember = "Label", FillWeight = 75, MinimumWidth = 240, FlatStyle = FlatStyle.Flat });
+        monitors.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Destination input", DataPropertyName = "Input", FillWeight = 25, MinimumWidth = 135, ToolTipText = "The monitor's numeric input source code. Find monitors shows the input currently selected on each screen." });
+        foreach (DataGridViewColumn column in monitors.Columns) column.SortMode = DataGridViewColumnSortMode.NotSortable;
     }
 
     void FindMonitors()
@@ -256,11 +115,12 @@ public sealed class SwitchWindow : Form
                 if (old != null) setting.Selector = old.Id;
             }
             BindMonitorColumns();
-            dirty = true;
+            MarkDirty();
             log.Text = NativeHardware.DescribeMonitors();
+            ShowActivity(true);
             SetStatus($"Found {monitorChoices.Count} monitor(s). Select them in the table and set destination inputs.");
         }
-        catch (Exception e) { SetStatus("Monitor discovery failed: " + e.Message); }
+        catch (Exception e) { SetStatus("Monitor discovery failed: " + e.Message, true); }
     }
 
     async Task DiscoverDevices()
@@ -289,16 +149,17 @@ public sealed class SwitchWindow : Form
                 log.Text = $"Receiver {receiver.Receiver}\r\n{receiver.Path}\r\n" + string.Join(Environment.NewLine, found.Select(r => $"Slot {r.Slot}: {r.Status}"));
             }
             devices.Refresh();
-            dirty = true;
+            MarkDirty();
+            ShowActivity(true);
+            SetStatus("Discovery complete. Review the device slots and features.");
         }
-        catch (Exception e) { SetStatus("Device discovery failed: " + e.Message); }
+        catch (Exception e) { SetStatus("Device discovery failed: " + e.Message, true); }
     }
 
     Profile CommitToProfile()
     {
         if (string.IsNullOrWhiteSpace(currentName)) throw new InvalidOperationException("Select or add a profile first.");
-        monitors.EndEdit();
-        devices.EndEdit();
+        if (!monitors.EndEdit() || !devices.EndEdit()) throw new InvalidOperationException("Check the value in the active table cell before continuing.");
         return new Profile
         {
             Target = targetName.Text.Trim(),
@@ -316,10 +177,11 @@ public sealed class SwitchWindow : Form
             Switching.Plan(profile);
             library.Save(currentName, profile);
             dirty = false;
-            SetStatus($"Saved {currentName} to profile.json.");
+            UpdateSaveState();
+            SetStatus($"{currentName} saved. Ready to switch.");
             return true;
         }
-        catch (Exception e) { SetStatus("Could not save: " + e.Message); return false; }
+        catch (Exception e) { SetStatus("Could not save: " + e.Message, true); return false; }
     }
 
     async Task TestSelectedMonitor()
@@ -329,12 +191,12 @@ public sealed class SwitchWindow : Form
             var profile = CommitToProfile();
             if (monitors.SelectedRows.Count == 0 || monitors.SelectedRows[0].DataBoundItem is not MonitorSetting selected)
                 throw new Exception("Select a monitor row first.");
-            if (MessageBox.Show($"Set only this monitor to input {selected.Input}? The screen may go blank if the input is not connected.", "Test monitor", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+            if (MessageBox.Show(this, $"Set only this monitor to input {selected.Input}? The screen may go blank if the input is not connected.", "Test monitor", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             var test = new Profile { Target = currentName, Channel = profile.Channel, Monitors = [selected] };
             await Switching.RunAll(Switching.Plan(test), message => log.AppendText(message + Environment.NewLine));
             SetStatus("Monitor command sent. Check the screen.");
         }
-        catch (Exception e) { SetStatus("Monitor test failed: " + e.Message); }
+        catch (Exception e) { SetStatus("Monitor test failed: " + e.Message, true); }
     }
 
     async Task TestSelectedDevice()
@@ -344,12 +206,12 @@ public sealed class SwitchWindow : Form
             var profile = CommitToProfile();
             if (devices.SelectedRows.Count == 0 || devices.SelectedRows[0].DataBoundItem is not DeviceSetting selected)
                 throw new Exception("Select a device row first.");
-            if (MessageBox.Show($"Switch only {selected.Name} to channel {profile.Channel}?", "Test device", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+            if (MessageBox.Show(this, $"Switch only {selected.Name} to channel {profile.Channel}?", "Test device", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             var test = new Profile { Target = currentName, Channel = profile.Channel, Devices = [selected] };
             await Switching.RunAll(Switching.Plan(test), message => log.AppendText(message + Environment.NewLine));
             SetStatus("Device report sent. Check which computer receives input.");
         }
-        catch (Exception e) { SetStatus("Device test failed: " + e.Message); }
+        catch (Exception e) { SetStatus("Device test failed: " + e.Message, true); }
     }
 
     async Task TestProfile()
@@ -359,11 +221,11 @@ public sealed class SwitchWindow : Form
             var profile = CommitToProfile();
             Switching.Plan(profile);
             if (!SaveCurrent()) return;
-            if (MessageBox.Show($"Switch monitors, mouse and keyboard to {currentName}?", "Test profile", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+            if (MessageBox.Show(this, $"Switch monitors, mouse and keyboard to {profile.Target}?", "Test profile", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
             await Switching.RunAll(Switching.Plan(profile), message => log.AppendText(message + Environment.NewLine));
             SetStatus("Windows accepted the profile commands. Check the other computer.");
         }
-        catch (Exception e) { SetStatus("Switch failed: " + e.Message); }
+        catch (Exception e) { SetStatus("Switch failed: " + e.Message, true); }
     }
 
     void AddProfile()
@@ -380,6 +242,7 @@ public sealed class SwitchWindow : Form
             SetStatus($"Profile '{name}' already exists.");
             return;
         }
+        if (!ConfirmLeaveCurrent()) return;
         var profile = Profile.Legacy(false);
         profile.Target = name;
         library.Save(name, profile);
@@ -388,14 +251,14 @@ public sealed class SwitchWindow : Form
         profileList.SelectedItem = name;
         loading = false;
         LoadProfile(name);
-        dirty = true;
+        MarkDirty();
         SetStatus($"Added {name}. Configure it and save.");
     }
 
     void DeleteProfile()
     {
         if (profileList.SelectedItem is not string name) return;
-        if (MessageBox.Show($"Delete profile '{name}'?", "Delete profile", MessageBoxButtons.YesNo) != DialogResult.Yes) return;
+        if (MessageBox.Show(this, $"Delete profile '{name}' and its settings?", "Delete profile", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
         library.Delete(name);
         PopulateProfileList();
         SetStatus($"Deleted {name}.");
@@ -403,19 +266,52 @@ public sealed class SwitchWindow : Form
 
     string? PromptForName()
     {
-        using var dialog = new Form { Text = "Add profile", Size = new Size(380, 155), StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false };
-        var input = new TextBox { Left = 16, Top = 16, Width = 330 };
-        var ok = new Button { Text = "Add", DialogResult = DialogResult.OK, Left = 180, Top = 56, Width = 75 };
-        var cancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Left = 270, Top = 56, Width = 75 };
-        dialog.Controls.AddRange([input, ok, cancel]);
+        using var dialog = new Form { Text = "New profile", ClientSize = new Size(460, 230), Font = EditorTheme.Font(), BackColor = EditorTheme.Canvas, AutoScaleMode = AutoScaleMode.Dpi, StartPosition = FormStartPosition.CenterParent, FormBorderStyle = FormBorderStyle.FixedDialog, MinimizeBox = false, MaximizeBox = false, ShowInTaskbar = false, Padding = new Padding(24) };
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 5 };
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 39));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 40));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        layout.Controls.Add(EditorTheme.Label("Create a profile", 19, style: FontStyle.Bold), 0, 0);
+        layout.Controls.Add(EditorTheme.Label("Choose a name, such as NIQ or Work-PC.", 9.5f, EditorTheme.Muted), 0, 1);
+        var input = new TextBox { Dock = DockStyle.Fill, Font = EditorTheme.Font(11), BorderStyle = BorderStyle.None, BackColor = Color.FromArgb(250, 251, 254), MaxLength = 40 };
+        layout.Controls.Add(FieldFrame(input, Padding.Empty), 0, 2);
+        var hint = EditorTheme.Label("Use letters, numbers, hyphens or underscores.", 8.5f, EditorTheme.Muted);
+        hint.Margin = new Padding(0, 7, 0, 0);
+        layout.Controls.Add(hint, 0, 3);
+        var buttons = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, WrapContents = false };
+        var ok = EditorTheme.Button("Create profile", 132, true);
+        var cancel = EditorTheme.Button("Cancel", 96);
+        ok.DialogResult = DialogResult.OK;
+        cancel.DialogResult = DialogResult.Cancel;
+        buttons.Controls.AddRange([ok, cancel]);
+        layout.Controls.Add(buttons, 0, 4);
+        dialog.Controls.Add(layout);
         dialog.AcceptButton = ok; dialog.CancelButton = cancel;
+        dialog.Shown += (_, _) => input.Focus();
         return dialog.ShowDialog(this) == DialogResult.OK ? input.Text.Trim() : null;
     }
 
     void MarkDirty()
     {
-        if (!loading) { dirty = true; status.Text = "Unsaved changes"; }
+        if (!loading)
+        {
+            dirty = true;
+            UpdateSaveState();
+            SetStatus("You have unsaved changes.");
+        }
     }
 
-    void SetStatus(string message) => status.Text = message;
+    void SetStatus(string message, bool error = false)
+    {
+        status.Text = message;
+        status.ForeColor = error ? Color.FromArgb(174, 58, 64) : EditorTheme.Ink;
+        tips.SetToolTip(status, message);
+        if (error)
+        {
+            log.AppendText(Environment.NewLine + message + Environment.NewLine);
+            ShowActivity(true);
+        }
+    }
 }
