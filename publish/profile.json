@@ -1,0 +1,77 @@
+{
+  "ActiveProfile": "IMP",
+  "Profiles": {
+    "NIQ": {
+      "Target": "NIQ",
+      "Channel": 2,
+      "Monitors": [
+        {
+          "Enabled": true,
+          "Selector": "MONITOR\\PHL092A\\{4d36e96e-e325-11ce-bfc1-08002be10318}\\0001",
+          "Input": 15
+        },
+        {
+          "Enabled": true,
+          "Selector": "MONITOR\\PHL092A\\{4d36e96e-e325-11ce-bfc1-08002be10318}\\0002",
+          "Input": 15
+        }
+      ],
+      "Devices": [
+        {
+          "Enabled": true,
+          "Name": "MX Master 2S",
+          "Receiver": "046D:C52B",
+          "ReceiverPath": "",
+          "Slot": 1,
+          "Feature": "09",
+          "Function": "1E"
+        },
+        {
+          "Enabled": true,
+          "Name": "K850",
+          "Receiver": "046D:C52B",
+          "ReceiverPath": "",
+          "Slot": 2,
+          "Feature": "08",
+          "Function": "1B"
+        }
+      ]
+    },
+    "IMP": {
+      "Target": "IMP",
+      "Channel": 1,
+      "Monitors": [
+        {
+          "Enabled": true,
+          "Selector": "MONITOR\\PHL092A\\{4d36e96e-e325-11ce-bfc1-08002be10318}\\0001",
+          "Input": 17
+        },
+        {
+          "Enabled": true,
+          "Selector": "MONITOR\\PHL092A\\{4d36e96e-e325-11ce-bfc1-08002be10318}\\0002",
+          "Input": 16
+        }
+      ],
+      "Devices": [
+        {
+          "Enabled": true,
+          "Name": "MX Master 2S",
+          "Receiver": "046D:C52B",
+          "ReceiverPath": "",
+          "Slot": 1,
+          "Feature": "09",
+          "Function": "1E"
+        },
+        {
+          "Enabled": true,
+          "Name": "K850",
+          "Receiver": "046D:C52B",
+          "ReceiverPath": "",
+          "Slot": 2,
+          "Feature": "08",
+          "Function": "1B"
+        }
+      ]
+    }
+  }
+}
