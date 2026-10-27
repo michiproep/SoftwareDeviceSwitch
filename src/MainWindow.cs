@@ -48,6 +48,7 @@ public sealed partial class SwitchWindow : Form
         currentName = name;
         library.Activate(name);
         var profile = library.Profiles[name];
+        LoadProfileShortcut(profile);
         heading.Text = name;
         targetName.Text = profile.Target;
         channel.Value = Math.Clamp(profile.Channel, 1, 3);
@@ -68,6 +69,7 @@ public sealed partial class SwitchWindow : Form
     {
         loading = true;
         currentName = "";
+        LoadProfileShortcut(null);
         heading.Text = "Your desk, connected";
         targetName.Text = "";
         channel.Value = 1;
@@ -87,7 +89,7 @@ public sealed partial class SwitchWindow : Form
 
     void BindMonitorColumns()
     {
-        var options = monitorChoices.Select((m, i) => m with { Label = $"Screen {i + 1}: {m.Label.Split(" | ")[0]} (input {m.CurrentInput})" }).ToList();
+        var options = monitorChoices.Select((m, i) => m with { Label = $"Screen {i + 1}: {m.Label.Split(" | ")[0]}" }).ToList();
         foreach (var setting in monitorSettings.Where(s => !string.IsNullOrWhiteSpace(s.Selector)))
             if (options.All(o => !o.Id.Equals(setting.Selector, StringComparison.OrdinalIgnoreCase)))
             {
@@ -99,26 +101,31 @@ public sealed partial class SwitchWindow : Form
         monitors.AutoGenerateColumns = false;
         monitors.Columns.Clear();
         monitors.Columns.Add(new DataGridViewCheckBoxColumn { HeaderText = "Use", DataPropertyName = "Enabled", Width = 52, MinimumWidth = 52, AutoSizeMode = DataGridViewAutoSizeColumnMode.None, HeaderCell = { Style = { Padding = new Padding(1), Alignment = DataGridViewContentAlignment.MiddleCenter } } });
-        monitors.Columns.Add(new DataGridViewComboBoxColumn { HeaderText = "Monitor", DataPropertyName = "Selector", DataSource = options, ValueMember = "Id", DisplayMember = "Label", FillWeight = 75, MinimumWidth = 240, FlatStyle = FlatStyle.Flat });
-        monitors.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Destination input", DataPropertyName = "Input", FillWeight = 25, MinimumWidth = 135, ToolTipText = "The monitor's numeric input source code. Find monitors shows the input currently selected on each screen." });
+        monitors.Columns.Add(new DataGridViewComboBoxColumn { Name = "Selector", HeaderText = "Monitor", DataPropertyName = "Selector", DataSource = options, ValueMember = "Id", DisplayMember = "Label", FillWeight = 50, MinimumWidth = 230, FlatStyle = FlatStyle.Flat });
+        monitors.Columns.Add(new DataGridViewComboBoxColumn { Name = "Input", HeaderText = "Destination input", DataPropertyName = "Input", ValueType = typeof(int), DataSource = MonitorInputs.Options(MonitorInputs.CommonCodes.Concat(monitorSettings.Select(m => m.Input))), ValueMember = "Code", DisplayMember = "Label", FillWeight = 28, MinimumWidth = 185, FlatStyle = FlatStyle.Flat, ToolTipText = "Find monitors reads the inputs reported by each screen. Use Input guide for availability details and custom codes." });
+        monitors.Columns.Add(new DataGridViewTextBoxColumn { Name = "CurrentInput", HeaderText = "Current input", ReadOnly = true, FillWeight = 22, MinimumWidth = 155 });
         foreach (DataGridViewColumn column in monitors.Columns) column.SortMode = DataGridViewColumnSortMode.NotSortable;
+        RefreshMonitorInputCells();
     }
 
-    void FindMonitors()
+    async Task FindMonitors()
     {
         try
         {
-            monitorChoices = NativeHardware.GetMonitorChoices();
+            if (!monitors.EndEdit()) return;
+            SetStatus("Reading monitor inputs. This can take a few seconds...");
+            monitorChoices = await Task.Run(NativeHardware.GetMonitorChoices);
+            bool migrated = false;
             foreach (var setting in monitorSettings)
             {
                 var old = monitorChoices.FirstOrDefault(m => m.LegacySelector.Equals(setting.Selector, StringComparison.OrdinalIgnoreCase));
-                if (old != null) setting.Selector = old.Id;
+                if (old != null && !old.Id.Equals(setting.Selector, StringComparison.OrdinalIgnoreCase)) { setting.Selector = old.Id; migrated = true; }
             }
             BindMonitorColumns();
-            MarkDirty();
-            log.Text = NativeHardware.DescribeMonitors();
-            ShowActivity(true);
-            SetStatus($"Found {monitorChoices.Count} monitor(s). Select them in the table and set destination inputs.");
+            if (migrated) MarkDirty();
+            log.Text = monitorChoices.Count == 0 ? "No physical monitors found. Check the display connection and DDC/CI setting." : string.Join("\r\n\r\n", monitorChoices.Select(DescribeMonitorInputs));
+            if (monitorChoices.Count == 0) SetStatus("No monitors found. Check the display connection and enable DDC/CI in the monitor's menu.", true);
+            else SetStatus($"Found {monitorChoices.Count} monitor(s). Choose a destination port or open Input guide.");
         }
         catch (Exception e) { SetStatus("Monitor discovery failed: " + e.Message, true); }
     }
@@ -164,6 +171,7 @@ public sealed partial class SwitchWindow : Form
         {
             Target = targetName.Text.Trim(),
             Channel = (int)channel.Value,
+            Shortcut = pendingShortcut,
             Monitors = monitorSettings.Select(m => new MonitorSetting { Enabled = m.Enabled, Selector = m.Selector, Input = m.Input }).ToList(),
             Devices = deviceSettings.Select(d => new DeviceSetting { Enabled = d.Enabled, Name = d.Name, Receiver = d.Receiver, ReceiverPath = d.ReceiverPath, Slot = d.Slot, Feature = d.Feature, Function = d.Function }).ToList()
         };
@@ -175,7 +183,11 @@ public sealed partial class SwitchWindow : Form
         {
             var profile = CommitToProfile();
             Switching.Plan(profile);
+            if (shortcutManager == null) throw new InvalidOperationException("Shortcut registration is not ready.");
+            if (!shortcutManager.TryReserve(currentName, profile.Shortcut, out string shortcutError)) throw new InvalidOperationException(shortcutError);
             library.Save(currentName, profile);
+            shortcutManager.Commit(currentName, profile.Shortcut);
+            RefreshShortcutEditor();
             dirty = false;
             UpdateSaveState();
             SetStatus($"{currentName} saved. Ready to switch.");
@@ -259,9 +271,14 @@ public sealed partial class SwitchWindow : Form
     {
         if (profileList.SelectedItem is not string name) return;
         if (MessageBox.Show(this, $"Delete profile '{name}' and its settings?", "Delete profile", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-        library.Delete(name);
-        PopulateProfileList();
-        SetStatus($"Deleted {name}.");
+        try
+        {
+            library.Delete(name);
+            shortcutManager?.Remove(name);
+            PopulateProfileList();
+            SetStatus($"Deleted {name}.");
+        }
+        catch (Exception error) { SetStatus("Could not delete profile: " + error.Message, true); }
     }
 
     string? PromptForName()

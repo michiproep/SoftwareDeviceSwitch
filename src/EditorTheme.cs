@@ -94,6 +94,7 @@ internal sealed class ThemeButton : Button
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.Clear(Parent?.BackColor ?? EditorTheme.Canvas);
+        if (Width < 2 || Height < 2) return;
         Color fill = Primary ? EditorTheme.Accent : Dark ? Color.FromArgb(38, 49, 71) : Color.White;
         if (hovered) fill = Primary ? Color.FromArgb(65, 73, 198) : Dark ? Color.FromArgb(50, 63, 88) : Color.FromArgb(246, 247, 253);
         if (pressed) fill = Primary ? Color.FromArgb(54, 62, 177) : Dark ? Color.FromArgb(58, 71, 97) : EditorTheme.AccentLight;
@@ -122,6 +123,7 @@ internal sealed class SurfacePanel : Panel
     protected override void OnPaintBackground(PaintEventArgs e)
     {
         e.Graphics.Clear(Parent?.BackColor ?? EditorTheme.Canvas);
+        if (Width < 2 || Height < 2) return;
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
         using var shape = EditorTheme.Rounded(new RectangleF(0.5f, 0.5f, Width - 1, Height - 1), 12 * DeviceDpi / 96f);
         using var fill = new SolidBrush(Color.White);

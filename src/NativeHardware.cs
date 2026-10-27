@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace SoftwareDeviceSwitch;
@@ -12,7 +13,11 @@ internal static class NativeHardware
         public override string ToString() => $"{Receiver} usage {UsagePage:X4}:{Usage:X4} output length {OutputLength}\r\n{Path}";
     }
     internal sealed record ChangeHostDiscovery(int Slot, byte? FeatureIndex, string Status);
-    internal sealed record MonitorChoice(string Id, string Label, string LegacySelector, string CurrentInput);
+    internal sealed record MonitorChoice(string Id, string Label, string LegacySelector, string CurrentInput)
+    {
+        internal IReadOnlyList<int> SupportedInputs { get; init; } = [];
+        internal string InputDiscoveryStatus { get; init; } = "Inputs have not been read yet. Click Find monitors.";
+    }
     internal sealed class Monitor : IDisposable
     {
         public string Selector { get; internal set; }
@@ -94,12 +99,49 @@ internal static class NativeHardware
             {
                 string id = m.Selector;
                 if (!ids.Add(id)) throw new Exception("Windows returned duplicate monitor IDs. Check the monitor cables and display arrangement.");
-                var input = GetVCPFeatureAndVCPFeatureReply(m.Handle, 0x60, out _, out uint current, out _) ? current.ToString() : "unavailable";
-                choices.Add(new(id, $"{m.Description} | {m.Selector}", m.LegacySelector, input));
+                choices.Add(ReadMonitorChoice(m));
             }
             return choices;
         }
         finally { foreach (var m in monitors) m.Dispose(); }
+    }
+    internal static MonitorChoice ReadMonitorInputs(string selector)
+    {
+        var monitors = OpenMonitors();
+        try
+        {
+            var monitor = monitors.SingleOrDefault(m => m.Selector.Equals(selector, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException("That monitor is not currently available. Use Find monitors and select its connection first.");
+            return ReadMonitorChoice(monitor);
+        }
+        finally { foreach (var monitor in monitors) monitor.Dispose(); }
+    }
+    static MonitorChoice ReadMonitorChoice(Monitor monitor)
+    {
+        var input = GetVCPFeatureAndVCPFeatureReply(monitor.Handle, 0x60, out _, out uint current, out _) ? current.ToString() : "unavailable";
+        List<int> inputs = [];
+        string status;
+        if (!GetCapabilitiesStringLength(monitor.Handle, out uint length))
+            status = "The monitor did not return input capabilities. Standard codes are unconfirmed.";
+        else if (length is < 2 or > 65536)
+            status = "The monitor returned an invalid capabilities length. Standard codes are unconfirmed.";
+        else
+        {
+            var buffer = new StringBuilder((int)length);
+            if (!CapabilitiesRequestAndCapabilitiesReply(monitor.Handle, buffer, length))
+                status = "Reading input capabilities failed. Standard codes are unconfirmed.";
+            else
+            {
+                inputs = MonitorInputs.ParseCapabilities(buffer.ToString());
+                status = inputs.Count > 0 ? $"{inputs.Count} inputs reported by this monitor."
+                    : "The monitor did not list supported input values. Standard codes are unconfirmed.";
+            }
+        }
+        return new(monitor.Selector, $"{monitor.Description} | {monitor.Selector}", monitor.LegacySelector, input)
+        {
+            SupportedInputs = inputs,
+            InputDiscoveryStatus = status
+        };
     }
     internal static void SetInput(Monitor monitor, uint input)
     {
@@ -241,6 +283,8 @@ internal static class NativeHardware
     [DllImport("dxva2.dll", SetLastError = true)] static extern bool DestroyPhysicalMonitor(IntPtr monitor);
     [DllImport("dxva2.dll", SetLastError = true)] static extern bool SetVCPFeature(IntPtr monitor, byte code, uint value);
     [DllImport("dxva2.dll", SetLastError = true)] static extern bool GetVCPFeatureAndVCPFeatureReply(IntPtr monitor, byte code, out uint type, out uint current, out uint maximum);
+    [DllImport("dxva2.dll", SetLastError = true)] static extern bool GetCapabilitiesStringLength(IntPtr monitor, out uint length);
+    [DllImport("dxva2.dll", CharSet = CharSet.Ansi, ExactSpelling = true, SetLastError = true)] static extern bool CapabilitiesRequestAndCapabilitiesReply(IntPtr monitor, [Out] StringBuilder capabilities, uint length);
     [DllImport("hid.dll")] static extern void HidD_GetHidGuid(out Guid guid);
     [DllImport("hid.dll")] [return: MarshalAs(UnmanagedType.U1)] static extern bool HidD_GetAttributes(SafeFileHandle handle, ref HidAttributes attributes);
     [DllImport("hid.dll")] [return: MarshalAs(UnmanagedType.U1)] static extern bool HidD_GetPreparsedData(SafeFileHandle handle, out IntPtr data);

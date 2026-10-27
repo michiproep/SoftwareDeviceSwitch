@@ -13,6 +13,7 @@ static class Program
             foreach (bool pc in new[] { false, true })
             {
                 var p = Profile.Legacy(pc);
+                for (int i = 0; i < p.Monitors.Count; i++) p.Monitors[i].Selector = $"MONITOR\\SELFTEST\\{i + 1}";
                 var plan = Switching.Plan(p);
                 if (plan.Count != 4 || plan[0].Arguments[3] != (pc ? "17" : "15") || plan[1].Arguments[3] != (pc ? "16" : "15") || plan[2].Arguments[^1] != $"0x10,0x01,0x09,0x1E,0x{(pc ? 0 : 1):X2},0x00,0x00" || plan[3].Arguments[^1] != $"0x10,0x02,0x08,0x1B,0x{(pc ? 0 : 1):X2},0x00,0x00") throw new Exception("Legacy command regression");
                 var copy = JsonSerializer.Deserialize<Profile>(JsonSerializer.Serialize(p))!;
@@ -23,6 +24,20 @@ static class Program
             return 0;
         }
         ApplicationConfiguration.Initialize();
+        bool startInTray = args.Length == 1 && args[0].Equals("--tray", StringComparison.OrdinalIgnoreCase);
+        if (args.Length == 0 || startInTray)
+        {
+            using var instance = new DesktopInstance();
+            if (!instance.TryEnter())
+            {
+                if (!startInTray) instance.ShowExisting();
+                return 0;
+            }
+            using var window = new SwitchWindow(ProfileLibrary.Load(), startInTray);
+            instance.Listen(window);
+            Application.Run(window);
+            return 0;
+        }
         var library = ProfileLibrary.Load();
         if (args.Length == 1 && args[0].Equals("--list-profiles", StringComparison.OrdinalIgnoreCase))
         {
@@ -50,7 +65,6 @@ static class Program
                 return 1;
             }
         }
-        Application.Run(new SwitchWindow(library));
         return 0;
     }
     static void TryWriteRunLog(string message)
@@ -155,9 +169,18 @@ public sealed class ProfileLibrary
     }
     public void Save(string name, Profile profile)
     {
+        bool existed = Profiles.TryGetValue(name, out var previous);
+        string previousActive = ActiveProfile;
         Profiles[name] = profile;
         ActiveProfile = name;
-        Persist();
+        try { Persist(); }
+        catch
+        {
+            if (existed) Profiles[name] = previous!;
+            else Profiles.Remove(name);
+            ActiveProfile = previousActive;
+            throw;
+        }
     }
     public void Activate(string name)
     {
@@ -166,9 +189,17 @@ public sealed class ProfileLibrary
     }
     public void Delete(string name)
     {
+        bool existed = Profiles.TryGetValue(name, out var previous);
+        string previousActive = ActiveProfile;
         Profiles.Remove(name);
         ActiveProfile = Profiles.Keys.FirstOrDefault() ?? "";
-        Persist();
+        try { Persist(); }
+        catch
+        {
+            if (existed) Profiles[name] = previous!;
+            ActiveProfile = previousActive;
+            throw;
+        }
     }
     void Persist()
     {
@@ -183,6 +214,8 @@ public sealed class Profile
 {
     public string Target { get; set; } = "Laptop";
     public int Channel { get; set; } = 2;
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ProfileShortcut? Shortcut { get; set; }
     public List<MonitorSetting> Monitors { get; set; } = [];
     public List<DeviceSetting> Devices { get; set; } = [];
     public static Profile Legacy(bool toPc) => new()

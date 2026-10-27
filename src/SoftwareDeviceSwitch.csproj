@@ -11,5 +11,11 @@
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <DebugType>none</DebugType>
     <DebugSymbols>false</DebugSymbols>
+    <Version>0.1.0</Version>
+    <Product>Device Switch</Product>
+    <Description>Switch monitor inputs and Logitech devices between computers.</Description>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="SoftwareDeviceSwitch.Checks" />
+  </ItemGroup>
 </Project>

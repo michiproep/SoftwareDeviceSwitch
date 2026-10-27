@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/SoftwareDeviceSwitch.csproj" />
+  <Project Path="tests/SoftwareDeviceSwitch.Checks/SoftwareDeviceSwitch.Checks.csproj" />
+</Solution>

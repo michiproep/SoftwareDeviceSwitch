@@ -24,7 +24,7 @@ public sealed partial class SwitchWindow
     readonly CheckBox advancedFields = new() { Text = "Advanced fields", AutoSize = true, Font = EditorTheme.Font(9), ForeColor = EditorTheme.Muted, Cursor = Cursors.Hand, Margin = new Padding(0, 10, 0, 0) };
     readonly Panel sidebar = new() { Dock = DockStyle.Fill, BackColor = EditorTheme.Sidebar, Padding = new Padding(18, 24, 18, 18) };
     readonly Panel editorBody = new() { Dock = DockStyle.Fill, AutoScroll = true, BackColor = EditorTheme.Canvas, Padding = new Padding(28, 0, 28, 8) };
-    readonly TableLayoutPanel content = new() { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 1, RowCount = 4, BackColor = EditorTheme.Canvas, Margin = Padding.Empty, Padding = Padding.Empty };
+    readonly TableLayoutPanel content = new() { AutoSize = true, Dock = DockStyle.Top, ColumnCount = 1, RowCount = 5, BackColor = EditorTheme.Canvas, Margin = Padding.Empty, Padding = Padding.Empty };
     readonly ToolTip tips = new() { AutoPopDelay = 12000, InitialDelay = 500, ReshowDelay = 200 };
     List<NativeHardware.MonitorChoice> monitorChoices = [];
     BindingList<MonitorSetting> monitorSettings = [];
@@ -36,9 +36,11 @@ public sealed partial class SwitchWindow
     bool activityVisible;
     SurfacePanel activityCard = null!;
 
-    public SwitchWindow(ProfileLibrary library)
+    public SwitchWindow(ProfileLibrary library, bool startInTray = false)
     {
         this.library = library;
+        startHidden = startInTray;
+        ShowInTaskbar = !startInTray;
         Text = "Device Switch";
         Font = EditorTheme.Font();
         AutoScaleMode = AutoScaleMode.Dpi;
@@ -62,11 +64,11 @@ public sealed partial class SwitchWindow
         {
             if (!devices.EndEdit()) return;
             BindDeviceColumns();
-            content.RowStyles[2].Height = (advancedFields.Checked ? 294 : 270) * DeviceDpi / 96f;
+            content.RowStyles[3].Height = (advancedFields.Checked ? 294 : 270) * DeviceDpi / 96f;
         };
         foreach (var grid in new[] { monitors, devices })
         {
-            grid.CellValueChanged += (_, _) => { if (grid.ContainsFocus || grid.IsCurrentCellInEditMode) MarkDirty(); };
+            grid.CellValueChanged += (_, e) => { if (e.ColumnIndex >= 0 && !grid.Columns[e.ColumnIndex].ReadOnly && (grid.ContainsFocus || grid.IsCurrentCellInEditMode)) MarkDirty(); };
             grid.UserDeletedRow += (_, _) => MarkDirty();
             grid.CurrentCellDirtyStateChanged += (_, _) =>
             {
@@ -82,11 +84,18 @@ public sealed partial class SwitchWindow
         monitors.CellToolTipTextNeeded += (_, e) =>
         {
             if (e.RowIndex >= 0 && monitors.Rows[e.RowIndex].DataBoundItem is MonitorSetting setting)
-                e.ToolTipText = setting.Selector;
+                e.ToolTipText = e.ColumnIndex == monitors.Columns["Selector"]?.Index ? setting.Selector : MonitorInputDetails(setting);
         };
-        FormClosing += (_, e) => { if (busy || !ConfirmLeaveCurrent()) e.Cancel = true; };
-        FormClosed += (_, _) => tips.Dispose();
+        monitors.DataBindingComplete += (_, _) => RefreshMonitorInputCells();
+        monitors.CellValueChanged += (_, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex == monitors.Columns["Selector"]?.Index)
+                RefreshMonitorInputCell(monitors.Rows[e.RowIndex]);
+        };
+        FormClosing += HandleWindowClosing;
         PopulateProfileList();
+        InitializeTray();
+        InitializeShortcuts();
     }
 
     void BuildProfileMenu()
@@ -96,7 +105,7 @@ public sealed partial class SwitchWindow
         menu.RowStyles.Add(new RowStyle(SizeType.Absolute, 100));
         menu.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
         menu.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        menu.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
+        menu.RowStyles.Add(new RowStyle(SizeType.Absolute, 106));
         menu.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
 
         var brand = new Panel { Dock = DockStyle.Fill, BackColor = EditorTheme.Sidebar };
@@ -116,6 +125,7 @@ public sealed partial class SwitchWindow
         var local = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, Padding = new Padding(6, 12, 0, 0), BackColor = EditorTheme.Sidebar };
         local.Controls.Add(EditorTheme.Label("THIS COMPUTER", 8, EditorTheme.SidebarMuted, FontStyle.Bold));
         local.Controls.Add(EditorTheme.Label(Environment.MachineName, 9.5f, Color.FromArgb(222, 229, 243)));
+        local.Controls.Add(startWithWindows);
         menu.Controls.Add(local, 0, 3);
 
         var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = EditorTheme.Sidebar };
@@ -147,6 +157,7 @@ public sealed partial class SwitchWindow
         g.FillRectangle(background, e.Bounds);
         float scale = profileList.DeviceDpi / 96f;
         var bounds = new RectangleF(e.Bounds.X, e.Bounds.Y + 4 * scale, e.Bounds.Width - 1, e.Bounds.Height - 8 * scale);
+        if (bounds.Width <= 0 || bounds.Height <= 0) return;
         if (selected)
         {
             using var shape = EditorTheme.Rounded(bounds, 9 * scale);
@@ -195,15 +206,17 @@ public sealed partial class SwitchWindow
 
         content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 148));
+        content.RowStyles.Add(new RowStyle(SizeType.Absolute, 174));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 270));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 270));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 0));
         content.Controls.Add(BuildDestinationCard(), 0, 0);
-        content.Controls.Add(BuildMonitorSection(), 0, 1);
-        content.Controls.Add(BuildDeviceSection(), 0, 2);
+        content.Controls.Add(BuildShortcutCard(), 0, 1);
+        content.Controls.Add(BuildMonitorSection(), 0, 2);
+        content.Controls.Add(BuildDeviceSection(), 0, 3);
         activityCard = BuildSection("Activity", "Discovery results, connection details and switch commands.", new Panel(), log);
         activityCard.Visible = false;
-        content.Controls.Add(activityCard, 0, 3);
+        content.Controls.Add(activityCard, 0, 4);
         editorBody.Controls.Add(content);
         root.Controls.Add(editorBody, 0, 1);
 
@@ -271,10 +284,12 @@ public sealed partial class SwitchWindow
         var find = EditorTheme.Button("Find monitors", 130);
         var test = EditorTheme.Button("Test selected", 126);
         find.Margin = Padding.Empty;
-        find.Click += (_, _) => FindMonitors();
+        find.Click += async (_, _) => await RunBusy(FindMonitors);
         test.Click += async (_, _) => await RunBusy(TestSelectedMonitor);
-        actions.Controls.AddRange([find, test]);
-        return BuildSection("Monitors", "Choose each screen and the input connected to your destination computer.", actions, monitors);
+        var guide = EditorTheme.Button("Input guide", 124);
+        guide.Click += (_, _) => ShowInputGuide();
+        actions.Controls.AddRange([find, test, guide]);
+        return BuildSection("Monitors", "Find monitors reads available ports. Input guide explains port names and custom codes.", actions, monitors);
     }
 
     Control BuildDeviceSection()
@@ -350,7 +365,7 @@ public sealed partial class SwitchWindow
     void ShowActivity(bool visible)
     {
         activityVisible = visible;
-        content.RowStyles[3].Height = visible ? 210 * DeviceDpi / 96f : 0;
+        content.RowStyles[4].Height = visible ? 210 * DeviceDpi / 96f : 0;
         activityCard.Visible = visible;
         activityButton.Text = visible ? "Hide log" : "Activity";
         content.PerformLayout();
@@ -362,7 +377,7 @@ public sealed partial class SwitchWindow
         profilesCaption.Text = $"PROFILES  /  {library.Profiles.Count}";
         summary.Text = string.IsNullOrEmpty(currentName) ? "Add a profile to configure your desk." : $"{monitorSettings.Count(m => m.Enabled)} monitors  /  {deviceSettings.Count(d => d.Enabled)} devices  /  Channel {channel.Value}";
         saveButton.Enabled = switchButton.Enabled = !busy && !string.IsNullOrEmpty(currentName);
-        for (int row = 0; row < 3; row++)
+        for (int row = 0; row < 4; row++)
             if (content.GetControlFromPosition(0, row) is Control card) card.Enabled = !busy && !string.IsNullOrEmpty(currentName);
         profileList.Invalidate();
     }

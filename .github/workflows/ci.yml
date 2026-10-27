@@ -1,0 +1,46 @@
+name: Build and check
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Restore
+        run: dotnet restore SoftwareDeviceSwitch.slnx
+      - name: Build
+        run: dotnet build SoftwareDeviceSwitch.slnx -c Release --no-restore --warnaserror
+      - name: Check command planning, profiles and input parsing
+        run: dotnet run --project tests/SoftwareDeviceSwitch.Checks -c Release --no-build
+      - name: Build portable package
+        run: ./scripts/Build-Release.ps1 -OutputDirectory artifacts/ci
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: SoftwareDeviceSwitch-win-x64
+          path: |
+            artifacts/ci/SoftwareDeviceSwitch.exe
+            artifacts/ci/*.zip
+            artifacts/ci/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

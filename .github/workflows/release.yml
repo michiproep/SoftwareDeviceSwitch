@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag, for example v0.1
+        required: true
+        default: v0.1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-2025
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.x
+      - name: Resolve release version
+        id: version
+        run: |
+          $version = ./scripts/Get-ReleaseVersion.ps1 -Tag $env:RELEASE_TAG
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Restore
+        run: dotnet restore SoftwareDeviceSwitch.slnx
+      - name: Build
+        run: dotnet build SoftwareDeviceSwitch.slnx -c Release --no-restore --warnaserror
+      - name: Check command planning, profiles and input parsing
+        run: dotnet run --project tests/SoftwareDeviceSwitch.Checks -c Release --no-build
+      - name: Build release assets
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: ./scripts/Build-Release.ps1 -Version $env:RELEASE_VERSION -OutputDirectory artifacts/release
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/Publish-Release.ps1 -Tag $env:RELEASE_TAG -Repository $env:GITHUB_REPOSITORY
